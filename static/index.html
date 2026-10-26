@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Funnel · статистика</title>
+  <script src="https://telegram.org/js/telegram-web-app.js?64"></script>
+  <style>
+    :root {font-family:Inter,system-ui,-apple-system,Arial,sans-serif; color:#eff4ff;background:#0d1220}
+    * {box-sizing:border-box} body {margin:0;padding:28px 16px 50px}
+    main {max-width:1050px;margin:auto} .top {display:flex;justify-content:space-between;align-items:center;gap:20px;flex-wrap:wrap}
+    h1 {font-size:clamp(26px,5vw,36px);margin:4px 0} h2 {font-size:18px;margin:0 0 18px}
+    .eyebrow {font-size:12px;text-transform:uppercase;letter-spacing:2px;color:#91a4cb;font-weight:700}
+    .muted {color:#91a4cb} .cards {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:26px 0}
+    .card,.panel {border:1px solid #26324b;background:#171f31;border-radius:18px;padding:22px}
+    .card strong {display:block;font-size:36px;letter-spacing:-1px;margin-top:15px}
+    .card .label {color:#a5b5d6;font-size:14px}
+    .panels {display:grid;grid-template-columns:1fr 1.2fr;gap:14px}
+    button {background:#7288ff;border:0;padding:12px 18px;border-radius:12px;color:white;cursor:pointer;font-weight:700}
+    button:hover {background:#586fea} table {width:100%;border-collapse:collapse;font-size:14px}
+    th,td {padding:11px 8px;text-align:left;border-bottom:1px solid #2c3851} th {color:#91a4cb;font-weight:500}
+    .table-wrap {overflow-x:auto} .bars {display:flex;gap:10px;align-items:end;min-height:190px;padding-top:20px}
+    .bar-group {flex:1;min-width:0;text-align:center} .bar {background:linear-gradient(#91a1ff,#5e74fa);border-radius:7px 7px 2px 2px;min-height:4px}
+    .bar-group small {display:block;color:#91a4cb;font-size:10px;margin-top:9px}
+    .value {font-size:12px;padding-bottom:6px}
+    #error {color:#ff9f9f;margin-top:20px} #updated {font-size:12px;color:#91a4cb;margin-top:16px}
+    [hidden] { display:none !important }
+    .login {max-width:420px;margin:12vh auto 0;padding:28px;border:1px solid #26324b;background:#171f31;border-radius:18px}
+    .login input {width:100%;padding:13px;border-radius:10px;border:1px solid #394663;background:#0d1220;color:white;margin:14px 0}
+    .login button {width:100%}
+    @media(max-width:750px){.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.panels{grid-template-columns:1fr}.card{padding:17px}.card strong{font-size:30px}}
+    @media(max-width:380px){.cards{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<section id="loginScreen" class="login" hidden>
+  <div class="eyebrow">Telegram · Mini App</div>
+  <h1>Вход в дашборд 🐾</h1>
+  <p class="muted">Статистика доступна только после авторизации.</p>
+  <form id="loginForm">
+    <label for="password">Пароль администратора</label>
+    <input id="password" type="password" autocomplete="current-password" required>
+    <button type="submit">Войти</button>
+  </form>
+  <p id="loginError" role="alert" style="color:#ff9f9f"></p>
+</section>
+<main id="dashboard" hidden>
+  <div class="top"><div><div class="eyebrow">Telegram · Mini App</div><h1>Дашборд воронки 🐾</h1><div class="muted">Регистрации и рассылки в реальном времени</div></div><div><button id="refresh">↻ Обновить</button> <button id="logout">Выйти</button></div></div>
+  <div class="cards">
+    <div class="card"><span class="label">Уникальные пользователи</span><strong id="users">—</strong></div>
+    <div class="card"><span class="label">Зарегистрировались</span><strong id="registered">—</strong></div>
+    <div class="card"><span class="label">Конверсия</span><strong id="conversion">—</strong></div>
+    <div class="card"><span class="label">Команд /start</span><strong id="starts">—</strong></div>
+    <div class="card"><span class="label">Сообщений отправлено</span><strong id="sent">—</strong></div>
+    <div class="card"><span class="label">В очереди / ошибки</span><strong id="queue">—</strong></div>
+  </div>
+  <div class="panels">
+    <section class="panel"><h2>Регистрации по дням</h2><div class="bars" id="chart"><span class="muted">Пока нет данных</span></div></section>
+    <section class="panel"><h2>Последние регистрации</h2><div class="table-wrap"><table><thead><tr><th>Пользователь</th><th>ID</th><th>Дата (UTC)</th></tr></thead><tbody id="recent"><tr><td colspan="3" class="muted">Пока нет данных</td></tr></tbody></table></div></section>
+  </div>
+  <p id="updated"></p><p id="error" role="alert"></p>
+</main>
+<script>
+  'use strict';
+  // Сервер проверяет подпись initData; значения initDataUnsafe не используем.
+  const tg = window.Telegram?.WebApp;
+  tg?.ready(); tg?.expand();
+  const $ = (id) => document.getElementById(id);
+  function render(data) {
+    for (const key of ['users','registered','starts','sent']) $(key).textContent = data[key];
+    $('conversion').textContent = data.conversion + '%';
+    $('queue').textContent = data.pending + ' / ' + data.failed;
+    const chart = $('chart'); chart.replaceChildren();
+    const maximum = Math.max(1, ...data.daily.map(d => d.amount));
+    if (!data.daily.length) chart.textContent = 'Пока нет регистраций';
+    for (const point of data.daily) {
+      const group = document.createElement('div'); group.className = 'bar-group';
+      const value = document.createElement('div'); value.className='value'; value.textContent = point.amount;
+      const bar = document.createElement('div'); bar.className='bar'; bar.style.height = Math.max(5, point.amount / maximum * 140) + 'px';
+      const label = document.createElement('small'); label.textContent = point.day.slice(5);
+      group.append(value,bar,label); chart.append(group);
+    }
+    const tbody = $('recent'); tbody.replaceChildren();
+    if (!data.recent.length) {const row=tbody.insertRow(); const cell=row.insertCell(); cell.colSpan=3; cell.textContent='Пока нет регистраций';}
+    for (const user of data.recent) {
+      const row=tbody.insertRow();
+      const display = user.first_name + (user.username ? ' (@' + user.username + ')' : '');
+      for (const value of [display, String(user.user_id), user.registered_at.slice(0,16).replace('T',' ')]) {
+        row.insertCell().textContent=value; // Безопасный textContent вместо HTML.
+      }
+    }
+    $('updated').textContent='Обновлено: '+new Date().toLocaleTimeString('ru-RU');
+  }
+  function showLogin(message = '') {
+    $('dashboard').hidden = true;
+    $('loginScreen').hidden = false;
+    $('loginError').textContent = message;
+  }
+  function showDashboard() {
+    $('loginScreen').hidden = true;
+    $('dashboard').hidden = false;
+  }
+  async function refresh() {
+    $('error').textContent='';
+    try {
+      const res = await fetch('/api/stats',{headers:{'X-Telegram-Init-Data':tg?.initData || ''},cache:'no-store'});
+      if (res.status === 403) {showLogin();return;}
+      if (!res.ok) throw new Error('Ошибка API: ' + res.status);
+      const data = await res.json();
+      render(data);
+      showDashboard();
+    } catch (err) { $('error').textContent = err.message; }
+  }
+  $('loginForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    $('loginError').textContent = '';
+    try {
+      const res = await fetch('/api/login', {
+        method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({password: $('password').value})
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.detail || 'Ошибка входа');
+      }
+      $('password').value = '';
+      await refresh();
+    } catch (error) { $('loginError').textContent = error.message; }
+  });
+  $('logout').addEventListener('click', async () => {
+    await fetch('/api/logout', {method:'POST'});
+    showLogin();
+  });
+  $('refresh').addEventListener('click',refresh);
+  refresh(); setInterval(refresh,10000);
+</script>
+</body>
+</html>
